@@ -6,29 +6,97 @@ import (
 	"weak"
 )
 
-func TestJanitorInvalidParameters(_ *testing.T) {
-	// Test with nil cleanupFunc
-	var wpNilFunc weak.Pointer[Cache[*DummyType]]
-	cacheInstance := New[*DummyType](0, time.Minute) // A dummy cache instance
-	wpNilFunc = weak.Make(cacheInstance)
+// Dummy target type for testing Janitor
+type mockTarget struct {
+	cleaned bool
+}
 
-	// This call should not panic and should return quickly.
-	StartJanitor(wpNilFunc, time.Millisecond*10, nil)
+// Dummy cleanup function for testing
+func mockCleanupFunc(target *mockTarget) {
+	if target != nil {
+		target.cleaned = true
+	}
+}
 
-	// Test with zero interval
-	var wpZeroInterval weak.Pointer[Cache[*DummyType]]
-	wpZeroInterval = weak.Make(cacheInstance)
-	cleanupFn := func(c *Cache[*DummyType]) { c.cleanup() }
+func TestNewJanitor(t *testing.T) {
+	target := &mockTarget{}
+	wp := weak.Make(target)
+	interval := 100 * time.Millisecond
+	cleanup := mockCleanupFunc
 
-	// This call should not panic and should return quickly.
-	StartJanitor(wpZeroInterval, 0, cleanupFn)
+	tests := []struct {
+		name          string
+		wp            weak.Pointer[mockTarget]
+		interval      time.Duration
+		cleanup       func(*mockTarget)
+		expectNil     bool
+		checkInstance func(*testing.T, *Janitor[mockTarget], *mockTarget, time.Duration)
+	}{
+		{
+			name:      "ValidArgs",
+			wp:        wp,
+			interval:  interval,
+			cleanup:   cleanup,
+			expectNil: false,
+			checkInstance: func(t *testing.T, janitor *Janitor[mockTarget], expectedTarget *mockTarget, expectedInterval time.Duration) {
+				if janitor.targetWeakRef.Value() != expectedTarget {
+					t.Errorf("Expected janitor.targetWeakRef to point to the target instance")
+				}
+				if janitor.interval != expectedInterval {
+					t.Errorf("Expected janitor.interval to be %v, got %v", expectedInterval, janitor.interval)
+				}
+				if janitor.cleanupFunc == nil {
+					t.Errorf("Expected janitor.cleanupFunc to be non-nil")
+				}
+				if janitor.stop == nil {
+					t.Errorf("Expected janitor.stop channel to be initialized")
+				}
+			},
+		},
+		{
+			name:      "NilCleanupFunc",
+			wp:        wp,
+			interval:  interval,
+			cleanup:   nil,
+			expectNil: true,
+		},
+		{
+			name:      "ZeroInterval",
+			wp:        wp,
+			interval:  0,
+			cleanup:   cleanup,
+			expectNil: true,
+		},
+		{
+			name:      "NegativeInterval",
+			wp:        wp,
+			interval:  -5 * time.Millisecond,
+			cleanup:   cleanup,
+			expectNil: true,
+		},
+	}
 
-	// Test with negative interval
-	var wpNegativeInterval weak.Pointer[Cache[*DummyType]]
-	wpNegativeInterval = weak.Make(cacheInstance)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			janitor := NewJanitor[mockTarget](tc.wp, tc.interval, tc.cleanup)
 
-	// This call should not panic and should return quickly.
-	StartJanitor(wpNegativeInterval, -time.Millisecond*10, cleanupFn)
-
-	time.Sleep(50 * time.Millisecond)
+			if tc.expectNil {
+				if janitor != nil {
+					t.Errorf("Expected NewJanitor to return nil, got %v", janitor)
+				}
+			} else {
+				if janitor == nil {
+					t.Errorf("Expected NewJanitor to return a non-nil instance, got nil")
+				} else if tc.checkInstance != nil {
+					// For the valid case, we pass the original target and interval for comparison
+					// In a more complex scenario, these might also come from the test case struct
+					originalTargetForValidCase := target
+					originalIntervalForValidCase := interval
+					if tc.name == "ValidArgs" { // Ensure we use the correct target and interval for the "ValidArgs" check
+						tc.checkInstance(t, janitor, originalTargetForValidCase, originalIntervalForValidCase)
+					}
+				}
+			}
+		})
+	}
 }

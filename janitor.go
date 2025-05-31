@@ -5,30 +5,50 @@ import (
 	"weak"
 )
 
-// StartJanitor initiates a background goroutine that periodically calls cleanupFunc
-// on the instance pointed to by targetWeakRef, as long as targetWeakRef resolves
-// to a non-nil instance.
-// The goroutine stops if the target instance is garbage collected.
-// T is the underlying type of the object stored in the weak pointer (e.g., Cache[ItemType]).
-// cleanupFunc will be called with a pointer to T (e.g., *Cache[ItemType]).
-func StartJanitor[T any](targetWeakRef weak.Pointer[T], interval time.Duration, cleanupFunc func(targetInstancePointer *T)) {
+type Janitor[T any] struct {
+	targetWeakRef weak.Pointer[T]                // Weak reference to the target instance
+	interval      time.Duration                  // Interval at which to call the cleanup function
+	cleanupFunc   func(targetInstancePointer *T) // Function to call for cleanup
+	stop          chan struct{}                  // Channel to signal stopping the janitor
+}
+
+func NewJanitor[T any](targetWeakRef weak.Pointer[T], interval time.Duration, cleanupFunc func(targetInstancePointer *T)) *Janitor[T] {
 	if cleanupFunc == nil || interval <= 0 {
+		return nil
+	}
+
+	return &Janitor[T]{
+		targetWeakRef: targetWeakRef,
+		interval:      interval,
+		cleanupFunc:   cleanupFunc,
+		stop:          make(chan struct{}),
+	}
+}
+
+func (j *Janitor[T]) Start() {
+	if j.cleanupFunc == nil || j.interval <= 0 {
 		return
 	}
 
 	go func() {
-		ticker := time.NewTicker(interval)
+		ticker := time.NewTicker(j.interval)
 		defer ticker.Stop()
 
 		for {
 			select {
 			case <-ticker.C:
-				instancePointer := targetWeakRef.Value()
+				instancePointer := j.targetWeakRef.Value()
 				if instancePointer == nil {
 					return
 				}
-				cleanupFunc(instancePointer)
+				j.cleanupFunc(instancePointer)
+			case <-j.stop:
+				return
 			}
 		}
 	}()
+}
+
+func (j *Janitor[T]) Stop() {
+	j.stop <- struct{}{}
 }
