@@ -8,9 +8,12 @@ import (
 	"weak"
 )
 
+// noExpiration represents a zero value for expiration, indicating the item never expires.
+const noExpiration int64 = 0
+
 // item represents a cached value along with its expiration timestamp.
 type item[T any] struct {
-	expiration int64 // expiration is the UnixNano timestamp when the item expires.
+	expiration int64 // expiration is the UnixNano timestamp when the item expires. 0 means no expiration.
 	value      T     // value is the cached data.
 }
 
@@ -18,14 +21,16 @@ type item[T any] struct {
 type Cache[T any] struct {
 	items             map[string]item[T] // items stores the cache data.
 	cleanupInterval   time.Duration      // cleanupInterval is the duration between cleanup cycles.
-	defaultExpiration time.Duration      // itemExpiration is the default duration for item validity.
+	defaultExpiration time.Duration      // defaultExpiration is the default duration for item validity.
 
 	mu *sync.RWMutex // mu is used for synchronizing access to the cache items.
 }
 
 // New creates a new Cache with the specified default expiration and cleanup interval.
 // If cleanupInterval is greater than 0, a background goroutine (janitor) is started
-// to automatically remove expired items.
+// to automatically remove expired items. The janitor uses a weak reference to the cache
+// to allow the cache to be garbage collected if it's no longer in use, and the
+// finalizer ensures the janitor goroutine is stopped.
 func New[T any](defaultExpiration time.Duration, cleanupInterval time.Duration) *Cache[T] {
 	c := &Cache[T]{
 		items:             make(map[string]item[T]),
@@ -35,6 +40,8 @@ func New[T any](defaultExpiration time.Duration, cleanupInterval time.Duration) 
 	}
 
 	if cleanupInterval > 0 {
+		// Use a weak reference so the janitor doesn't prevent the cache from being GC'd
+		// if the cache itself is no longer referenced elsewhere.
 		wp := weak.Make(c)
 
 		janitor := NewJanitor(wp, cleanupInterval, func(targetInstancePointer *Cache[T]) {
@@ -43,7 +50,9 @@ func New[T any](defaultExpiration time.Duration, cleanupInterval time.Duration) 
 			}
 		})
 		janitor.Start()
-		runtime.SetFinalizer(c, func(cache *Cache[T]) {
+		// Set a finalizer to stop the janitor goroutine when the cache is garbage collected,
+		// preventing a goroutine leak.
+		runtime.SetFinalizer(c, func(cacheInstance *Cache[T]) {
 			janitor.Stop()
 		})
 	}
@@ -57,15 +66,15 @@ func (c *Cache[T]) setWithExpiresAt(key string, value T, expiresAt time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	var expiration int64
+	var itemExpiration int64
 	if expiresAt.IsZero() {
-		expiration = 0 // Item never expires
+		itemExpiration = noExpiration
 	} else {
-		expiration = expiresAt.UnixNano()
+		itemExpiration = expiresAt.UnixNano()
 	}
 
 	c.items[key] = item[T]{
-		expiration: expiration,
+		expiration: itemExpiration,
 		value:      value,
 	}
 }
@@ -108,7 +117,7 @@ func (c *Cache[T]) GetAt(key string, now time.Time) (T, bool) {
 	defer c.mu.RUnlock()
 
 	if it, found := c.items[key]; found {
-		if it.expiration == 0 || it.expiration > now.UnixNano() {
+		if it.expiration == noExpiration || it.expiration > now.UnixNano() {
 			return it.value, true
 		}
 	}
@@ -128,10 +137,11 @@ func (c *Cache[T]) cleanupAt(now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	nowNanos := now.UnixNano()
 	// There were some benchmarks that showed that using a for loop with a range
 	// is still faster than using a min heap or deque to manage expiration for up to 1M items.
 	for key, it := range c.items {
-		if it.expiration != 0 && it.expiration <= now.UnixNano() {
+		if it.expiration != noExpiration && it.expiration <= nowNanos {
 			delete(c.items, key)
 		}
 	}
