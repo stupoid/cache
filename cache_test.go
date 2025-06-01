@@ -7,10 +7,9 @@ import (
 	"sync"
 	"testing"
 	"time"
-	"weak" // Assuming this is a local package or a specific external one
+	"weak"
 )
 
-// DummyType is a simple struct used for testing cache values.
 type DummyType struct {
 	ID   string
 	Data int
@@ -19,7 +18,7 @@ type DummyType struct {
 const (
 	testDefaultExpiration = 50 * time.Millisecond
 	testCleanupInterval   = 100 * time.Millisecond
-	epsilon               = 5 * time.Millisecond // A small duration for time comparisons
+	epsilon               = 5 * time.Millisecond
 )
 
 // Helper to create a new cache with default test settings for manual cleanup tests
@@ -76,7 +75,7 @@ func TestCache_BasicOperations(t *testing.T) {
 // TestCache_DefaultExpirationIsUsed tests that the default expiration is applied when Set is called.
 func TestCache_DefaultExpirationIsUsed(t *testing.T) {
 	defaultExp := 30 * time.Millisecond
-	cache := New[string](defaultExp, 0) // No janitor for precise GetAt checks
+	cache := New[string](defaultExp, 0)
 	key := "testDefaultExp"
 	now := time.Now()
 
@@ -261,7 +260,7 @@ func TestCache_JanitorLifecycle(t *testing.T) {
 	var cacheValue *Cache[*DummyType]
 	maxAttempts := 20
 	collected := false
-	for i := 0; i < maxAttempts; i++ {
+	for range maxAttempts {
 		runtime.GC()
 		time.Sleep(janitorCleanupInterval/2 + epsilon) // Give time for GC and finalizer
 		cacheValue = wp.Value()
@@ -288,7 +287,7 @@ func TestCache_Concurrency(t *testing.T) {
 	numOpsPerGoroutine := 100
 
 	// Concurrent Set operations
-	for i := 0; i < numGoroutines; i++ {
+	for i := range numGoroutines {
 		wg.Add(1)
 		go func(gNum int) {
 			defer wg.Done()
@@ -309,7 +308,7 @@ func TestCache_Concurrency(t *testing.T) {
 	successfulGets := 0
 	var mu sync.Mutex // To protect successfulGets counter
 
-	for i := 0; i < numGoroutines; i++ {
+	for i := range numGoroutines {
 		wg.Add(1)
 		go func(gNum int) {
 			defer wg.Done()
@@ -329,12 +328,6 @@ func TestCache_Concurrency(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Check if at least the "never expire" items were found
-	expectedNeverExpireGets := (numGoroutines * numOpsPerGoroutine) / 10
-	if successfulGets < expectedNeverExpireGets {
-		// This is a soft check, as Get itself might race with janitor cleanup for other items
-		// t.Logf("Concurrency: Expected at least %d 'never expire' gets, got %d. This can be timing dependent.", expectedNeverExpireGets, successfulGets)
-	}
 	t.Logf("Concurrency test finished. Found %d 'never expire' items. Run with -race flag.", successfulGets)
 }
 
@@ -488,7 +481,7 @@ func TestSet_KeyVariations(t *testing.T) {
 	t.Run("LongKey", func(t *testing.T) {
 		// Generate a reasonably long key
 		var runes []rune
-		for i := 0; i < 256; i++ {
+		for range 256 {
 			runes = append(runes, 'a')
 		}
 		longKey := string(runes) + strconv.FormatInt(time.Now().UnixNano(), 10)

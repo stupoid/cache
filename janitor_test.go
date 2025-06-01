@@ -78,7 +78,7 @@ func TestNewJanitor(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			janitor := NewJanitor[mockTarget](tc.wp, tc.interval, tc.cleanup)
+			janitor := NewJanitor(tc.wp, tc.interval, tc.cleanup)
 
 			if tc.expectNil {
 				if janitor != nil {
